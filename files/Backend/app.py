@@ -4,6 +4,8 @@ Run:  uvicorn app:app --reload --port 8000
 """
 
 import os, sys, json, pickle
+import urllib.request
+import urllib.parse
 from datetime import datetime
 from typing   import Optional
 
@@ -47,6 +49,76 @@ crime_df    = None
 density_grid = []
 model_bundle = None
 incidents_log: list = []    # in-memory crowd-reported incidents
+
+KNOWN_LOCATIONS = {
+    "mg road": {"latitude": 12.9716, "longitude": 77.5946, "display_name": "MG Road, Bengaluru"},
+    "city centre": {"latitude": 12.9716, "longitude": 77.5946, "display_name": "City Centre, Bengaluru"},
+    "majestic": {"latitude": 12.9768, "longitude": 77.5713, "display_name": "Majestic, Bengaluru"},
+    "ksr": {"latitude": 12.9768, "longitude": 77.5713, "display_name": "KSR Station, Bengaluru"},
+    "indiranagar": {"latitude": 12.9716, "longitude": 77.6412, "display_name": "Indiranagar, Bengaluru"},
+    "marathahalli": {"latitude": 12.9591, "longitude": 77.6971, "display_name": "Marathahalli, Bengaluru"},
+    "hebbal": {"latitude": 13.0358, "longitude": 77.5970, "display_name": "Hebbal, Bengaluru"},
+    "yelahanka": {"latitude": 13.1006, "longitude": 77.5964, "display_name": "Yelahanka, Bengaluru"},
+    "whitefield": {"latitude": 12.9698, "longitude": 77.7499, "display_name": "Whitefield, Bengaluru"},
+    "koramangala": {"latitude": 12.9352, "longitude": 77.6245, "display_name": "Koramangala, Bengaluru"},
+    "btm": {"latitude": 12.9165, "longitude": 77.6101, "display_name": "BTM Layout, Bengaluru"},
+    "jayanagar": {"latitude": 12.9258, "longitude": 77.5838, "display_name": "Jayanagar, Bengaluru"},
+    "electronic city": {"latitude": 12.8452, "longitude": 77.6602, "display_name": "Electronic City, Bengaluru"},
+    "bannerghatta": {"latitude": 12.8993, "longitude": 77.5975, "display_name": "Bannerghatta Road, Bengaluru"},
+    "shivajinagar": {"latitude": 12.9840, "longitude": 77.5975, "display_name": "Shivajinagar, Bengaluru"},
+    "domlur": {"latitude": 12.9609, "longitude": 77.6387, "display_name": "Domlur, Bengaluru"},
+}
+
+
+def _parse_coordinate_query(query: str) -> Optional[dict]:
+    if not query:
+        return None
+    cleaned = query.strip()
+    if not cleaned:
+        return None
+    if "," in cleaned:
+        parts = [p.strip() for p in cleaned.split(",") if p.strip()]
+        if len(parts) >= 2:
+            try:
+                lat = float(parts[0])
+                lon = float(parts[1])
+                return {"latitude": lat, "longitude": lon, "display_name": "User provided coordinates", "source": "coordinates"}
+            except ValueError:
+                return None
+    return None
+
+
+def geocode_query(query: str) -> dict:
+    """Resolve a place name or coordinate string into latitude/longitude values."""
+    if not query or not query.strip():
+        return {"latitude": 12.9716, "longitude": 77.5946, "display_name": "Bengaluru, Karnataka", "source": "fallback"}
+
+    parsed = _parse_coordinate_query(query)
+    if parsed:
+        return parsed
+
+    normalized = query.strip().lower()
+    for key, value in KNOWN_LOCATIONS.items():
+        if key in normalized or normalized in key:
+            return {**value, "source": "known"}
+
+    geocode_url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&countrycodes=in&q=" + urllib.parse.quote(query)
+    try:
+        request = urllib.request.Request(geocode_url, headers={"User-Agent": "SafeRoute-AI/1.0"})
+        with urllib.request.urlopen(request, timeout=6) as response:
+            payload = json.load(response)
+        if payload:
+            hit = payload[0]
+            return {
+                "latitude": float(hit.get("lat", 12.9716)),
+                "longitude": float(hit.get("lon", 77.5946)),
+                "display_name": hit.get("display_name", query),
+                "source": "nominatim",
+            }
+    except Exception:
+        pass
+
+    return {"latitude": 12.9716, "longitude": 77.5946, "display_name": "Bengaluru, Karnataka", "source": "fallback"}
 
 @app.on_event("startup")
 async def startup():
@@ -155,6 +227,12 @@ def get_crime_points(limit: int = 300):
         raise HTTPException(status_code=503, detail="Data not loaded")
     sample = crime_df.sample(min(limit, len(crime_df)), random_state=42)
     return {"crimes": sample[["latitude","longitude","crime_type","crime_severity","hour","area"]].to_dict("records")}
+
+
+@app.get("/geocode", tags=["Geocoding"])
+def geocode_endpoint(query: str):
+    """Resolve a place name or coordinate string into latitude/longitude."""
+    return geocode_query(query)
 
 
 @app.post("/report-incident", tags=["Community"])

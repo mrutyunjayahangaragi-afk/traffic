@@ -1,5 +1,6 @@
 import unittest
 
+from Backend.app import geocode_query
 from Backend.navigation_service import build_navigation_payload, generate_turn_instructions
 
 
@@ -22,6 +23,12 @@ class NavigationServiceTests(unittest.TestCase):
         coords = [(12.97, 77.59), (12.972, 77.595), (12.974, 77.6)]
         instructions = generate_turn_instructions(coords, 0)
         self.assertTrue(instructions["text"].startswith(("Turn", "Continue", "Destination")))
+
+    def test_geocode_query_returns_known_bangalore_location(self):
+        result = geocode_query("Koramangala")
+        self.assertIn("latitude", result)
+        self.assertIn("longitude", result)
+        self.assertGreater(result["latitude"], 12.0)
 
 
 if __name__ == "__main__":
